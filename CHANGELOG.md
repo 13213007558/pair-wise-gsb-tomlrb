@@ -1,3 +1,10 @@
+### Unreleased
+
+* Add Tomlrb.audit: explains how each table was formed (implicit parent, explicit table, dotted keys, array-of-tables)
+* Duplicate definition errors now report both the first establishing line and the conflicting declaration line
+* Fix false duplicate errors for parent tables declared after their children and for same-named tables under different array-of-tables elements
+* Fix silently accepted redefinitions of tables created by inline tables
+
 ### 2.0.4 - 2025-12-18
 
 * Update Racc to v1.8.1

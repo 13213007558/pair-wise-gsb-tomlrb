@@ -38,6 +38,26 @@ or
 Tomlrb.load_file('my_file', symbolize_keys: true)
 ```
 
+### Auditing table declarations
+
+`Tomlrb.audit` parses like `Tomlrb.parse` and additionally explains how
+every table was formed (implicit parent, explicit table, table created by
+dotted keys, or array-of-tables element):
+
+```ruby
+report = Tomlrb.audit("[a.b]\n[a]\n")
+report.output      # => {"a"=>{"b"=>{}}}
+report.formations  # => [a (implicit at line 1), a.b (explicit at line 1), a (explicit at line 2)]
+```
+
+The same audit logic backs `Tomlrb.parse`, so duplicate definitions are
+diagnosed with both the line where a key first established its semantic
+identity and the line of the conflicting declaration:
+
+```
+Key 'a' first established as explicit table at line 1; conflicting explicit table declaration at line 3
+```
+
 ## Benchmark
 
 You can run the benchmark against the only other v0.5.0 compliant parser to my knowledge with `ruby benchmarks/bench.rb`.

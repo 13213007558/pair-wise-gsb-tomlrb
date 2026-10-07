@@ -11,7 +11,9 @@ class Tomlrb::Parser < Tomlrb::GeneratedParser
   end
 
   def next_token
-    @tokenizer.next_token
+    token = @tokenizer.next_token
+    @handler.scanner_line = @tokenizer.token_line if token
+    token
   end
 
   def parse
