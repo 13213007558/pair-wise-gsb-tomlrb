@@ -8,6 +8,7 @@ module Tomlrb
       '\\f'  => "\f",
       '\\n'  => "\n",
       '\\r'  => "\r",
+      '\\e'  => "\e",
       '\\"'  => '"',
       '\\\\' => '\\'
     }.freeze
@@ -22,9 +23,13 @@ module Tomlrb
       end
     end
 
-    def self.replace_escaped_chars(str)
+    def self.replace_escaped_chars(str, version: '1.0.0')
       str.gsub(/\\(u[\da-fA-F]{4}|U[\da-fA-F]{8}|.)/) do |m|
         if m.size == 2
+          if m == '\\e' && version != '1.1.0'
+            raise Tomlrb::ParseError.new "Escape sequence #{m} is reserved"
+          end
+
           SPECIAL_CHARS[m] || (raise Tomlrb::ParseError.new "Escape sequence #{m} is reserved")
         else
           m[2..-1].to_i(16).chr(Encoding::UTF_8)

@@ -1,5 +1,5 @@
 class Tomlrb::GeneratedParser
-token IDENTIFIER STRING_MULTI STRING_BASIC STRING_LITERAL_MULTI STRING_LITERAL DATETIME LOCAL_TIME INTEGER NON_DEC_INTEGER FLOAT FLOAT_KEYWORD BOOLEAN NEWLINE EOS
+token IDENTIFIER STRING_MULTI STRING_BASIC STRING_LITERAL_MULTI STRING_LITERAL DATETIME LOCAL_TIME INTEGER NON_DEC_INTEGER FLOAT FLOAT_KEYWORD BOOLEAN NEWLINE INLINE_NEWLINE INLINE_TRAILING_COMMA EOS
 rule
   expressions
     | expressions expression
@@ -38,7 +38,7 @@ rule
     ;
   table_identifier_component
     : IDENTIFIER
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL
     | INTEGER
     | NON_DEC_INTEGER
@@ -50,6 +50,14 @@ rule
   inline_table
     : inline_table_start inline_table_end
     | inline_table_start inline_continued inline_table_end
+    | inline_table_start inline_newlines inline_table_end
+    | inline_table_start inline_newlines inline_continued inline_newlines inline_table_end
+    | inline_table_start inline_newlines inline_continued inline_table_end
+    | inline_table_start inline_continued inline_newlines inline_table_end
+    | inline_table_start inline_continued INLINE_TRAILING_COMMA inline_table_end
+    | inline_table_start inline_newlines inline_continued inline_newlines INLINE_TRAILING_COMMA inline_table_end
+    | inline_table_start inline_newlines inline_continued INLINE_TRAILING_COMMA inline_table_end
+    | inline_table_start inline_continued inline_newlines INLINE_TRAILING_COMMA inline_table_end
     ;
   inline_table_start
     : '{' { @handler.start_(:inline) }
@@ -66,7 +74,12 @@ rule
     ;
   inline_next
     : ',' inline_continued
-    ;
+    | ',' inline_newlines inline_continued
+  ;
+  inline_newlines
+    : inline_newlines INLINE_NEWLINE
+    | INLINE_NEWLINE
+  ;
   inline_assignment
     : inline_assignment_key '=' value {
       keys = @handler.end_(:inline_keys)
@@ -116,7 +129,7 @@ rule
     ;
   assignment_key_component
     : IDENTIFIER
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL
     | INTEGER
     | NON_DEC_INTEGER
@@ -223,8 +236,8 @@ rule
     | LOCAL_TIME { result = LocalTime.new(*val[0][1..-1]) }
     ;
   string
-    : STRING_MULTI { result = StringUtils.replace_escaped_chars(StringUtils.multiline_replacements(val[0])) }
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    : STRING_MULTI { result = StringUtils.replace_escaped_chars(StringUtils.multiline_replacements(val[0]), version: @version) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL_MULTI { result = StringUtils.strip_spaces(val[0]) }
     | STRING_LITERAL { result = val[0] }
     ;

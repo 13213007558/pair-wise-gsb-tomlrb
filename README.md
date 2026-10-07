@@ -4,11 +4,23 @@
 [![Gem Version](https://badge.fury.io/rb/tomlrb.svg)](http://badge.fury.io/rb/tomlrb)
 [![Build status](https://github.com/fbernier/tomlrb/workflows/ci/badge.svg)](https://github.com/fbernier/tomlrb/actions)
 
-A Racc based [TOML](https://github.com/toml-lang/toml) Ruby parser supporting the 1.0.0 version of the spec.
+A Racc based [TOML](https://github.com/toml-lang/toml) Ruby parser supporting TOML 1.0.0 and 1.1.0.
 
-## TODO
+## TOML versions
 
-* Dumper
+`Tomlrb.parse` uses TOML 1.0.0 by default. Pass `version: "1.1"` to accept TOML 1.1 syntax such as escape, date-times and times with omitted seconds, and multiline inline tables.
+
+```ruby
+Tomlrb.parse('at = 07:32', version: "1.1")
+```
+
+Use `Tomlrb.downgrade` to parse TOML 1.1 and emit TOML 1.0 text when the data can be represented without loss. The emitted document can be parsed again in 1.0 mode and retains TOML temporal and float types.
+
+```ruby
+toml_1_0 = Tomlrb.downgrade(toml_1_1, version: "1.1")
+```
+
+Values outside TOML's data model raise `Tomlrb::DowngradeError`, which exposes `path` and `reason`. `Tomlrb.dump` emits TOML 1.0 directly from a Ruby data structure.
 
 ## Installation
 
