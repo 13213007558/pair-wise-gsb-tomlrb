@@ -361,14 +361,14 @@ Racc_debug_parser = false
 
 module_eval(<<'.,.,', 'parser.y', 20)
   def _reduce_12(val, _values, result)
-     @handler.start_(:array_of_tables)
+     @handler.start_(:array_of_tables, line: @tokenizer.token_line)
     result
   end
 .,.,
 
 module_eval(<<'.,.,', 'parser.y', 21)
   def _reduce_13(val, _values, result)
-     @handler.start_(:table)
+     @handler.start_(:table, line: @tokenizer.token_line)
     result
   end
 .,.,
@@ -561,7 +561,7 @@ module_eval(<<'.,.,', 'parser.y', 108)
 module_eval(<<'.,.,', 'parser.y', 110)
   def _reduce_45(val, _values, result)
           keys = val[0].split('.')
-      @handler.start_(:keys)
+      @handler.start_(:keys, line: @tokenizer.token_line)
       keys.each { |key| @handler.push(key) }
 
     result
@@ -570,7 +570,7 @@ module_eval(<<'.,.,', 'parser.y', 110)
 
 module_eval(<<'.,.,', 'parser.y', 114)
   def _reduce_46(val, _values, result)
-     @handler.start_(:keys); @handler.push(val[0])
+     @handler.start_(:keys, line: @tokenizer.token_line); @handler.push(val[0])
     result
   end
 .,.,

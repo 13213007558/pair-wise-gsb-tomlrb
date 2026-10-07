@@ -1,3 +1,14 @@
+### Unreleased
+
+* Add Tomlrb.audit: a declaration audit entry point explaining how each
+  table was formed (implicit parent, explicit table, dotted-key table,
+  array of tables) and diagnosing duplicate definitions with both the
+  first establishing declaration and the conflicting one
+* Fix false duplicate errors when declaring sub-tables or arrays of
+  tables under tables created by dotted keys (e.g. "t.x = 1" then "[t.u]")
+* Duplicate declaration errors now carry the conflicting path, both
+  declaration kinds and both line numbers
+
 ### 2.0.4 - 2025-12-18
 
 * Update Racc to v1.8.1

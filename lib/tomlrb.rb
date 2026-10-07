@@ -2,6 +2,11 @@
 
 require 'time'
 require 'stringio'
+
+module Tomlrb
+  class ParseError < StandardError; end
+end
+
 require 'tomlrb/version'
 require 'tomlrb/local_date_time'
 require 'tomlrb/local_date'
@@ -12,8 +17,6 @@ require 'tomlrb/parser'
 require 'tomlrb/handler'
 
 module Tomlrb
-  class ParseError < StandardError; end
-
   # Parses a valid TOML string into its Ruby data structure
   #
   # @param string_or_io [String, StringIO] the content
@@ -31,6 +34,30 @@ module Tomlrb
     end
 
     handler.output
+  end
+
+  # Audits a TOML string, explaining how each table was formed
+  #
+  # Uses the same declaration audit as Tomlrb.parse, so duplicate
+  # definitions are diagnosed identically: the raised
+  # Tomlrb::Key::KeyConflict points at both the declaration that first
+  # established the semantic identity and the conflicting declaration.
+  #
+  # @param string_or_io [String, StringIO] the content
+  # @param options [Hash] the options hash
+  # @option options [Boolean] :symbolize_keys (false) whether to return the keys as symbols or strings
+  # @return [AuditReport] the report of table declarations, in establishment order
+  def self.audit(string_or_io, **options)
+    io = string_or_io.is_a?(String) ? StringIO.new(string_or_io) : string_or_io
+    scanner = Scanner.new(io)
+    parser = Parser.new(scanner, **options)
+    begin
+      handler = parser.parse
+    rescue Racc::ParseError => e
+      raise ParseError, e.message
+    end
+
+    handler.audit_report
   end
 
   # Reads a file content and parses it into its Ruby data structure

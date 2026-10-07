@@ -8,10 +8,14 @@ module Tomlrb
       @output = {}
       @current = @output
       @stack = []
-      @array_names = []
       @current_table = []
       @keys = Keys.new
+      @statement_line = nil
       @symbolize_keys = options[:symbolize_keys]
+    end
+
+    def audit_report
+      @keys.report
     end
 
     def set_context(identifiers, is_array_of_tables: false)
@@ -20,7 +24,7 @@ module Tomlrb
       end
 
       @current_table = identifiers.dup
-      @keys.add_table_key identifiers, is_array_of_tables
+      @keys.add_table_key identifiers, is_array_of_tables, line: @statement_line
       @current = @output
 
       deal_with_array_of_tables(identifiers, is_array_of_tables) do |identifierz|
@@ -37,13 +41,8 @@ module Tomlrb
     end
 
     def deal_with_array_of_tables(identifiers, is_array_of_tables)
-      stringified_identifier = identifiers.join('.')
-
       if is_array_of_tables
-        @array_names << stringified_identifier
         last_identifier = identifiers.pop
-      elsif @array_names.include?(stringified_identifier)
-        raise ParseError, 'Cannot define a normal table with the same name as an already established array'
       end
 
       yield(identifiers)
@@ -58,7 +57,7 @@ module Tomlrb
     end
 
     def assign(k)
-      @keys.add_pair_key k, @current_table
+      @keys.add_pair_key k, @current_table, line: @statement_line
       current = @current
       while (key = k.shift)
         key = key.to_sym if @symbolize_keys
@@ -77,7 +76,7 @@ module Tomlrb
       inline_arrays.each do |inline_array|
         current = merged_inline
         value = inline_array.pop
-        keys.add_table_key inline_array, value.is_a?(Array)
+        keys.add_pair_key inline_array, [], line: @statement_line
 
         inline_array.each_with_index do |inline_key, inline_index|
           inline_key = inline_key.to_sym if @symbolize_keys
@@ -85,11 +84,9 @@ module Tomlrb
 
           if last_key
             if current[inline_key].nil?
-              keys.add_pair_key [inline_key], []
-
               current[inline_key] = value
             else
-              raise Key::KeyConflict, "Inline key #{inline_key} is already used"
+              raise ParseError, "Inline key #{inline_key} is already used"
             end
           else
             current[inline_key] ||= {}
@@ -101,7 +98,8 @@ module Tomlrb
       push(merged_inline)
     end
 
-    def start_(type)
+    def start_(type, line: nil)
+      @statement_line = line if line
       push([type])
     end
 
@@ -139,140 +137,253 @@ module Tomlrb
     end
   end
 
+  # A single node in the declaration tree built while parsing.
+  #
+  # Every table found in a document gets exactly one TableDeclaration per
+  # scope, recording how its semantic identity was established:
+  #
+  # - +:implicit+ -- parent table auto-created by a child declaration
+  #   ([a.b] implicitly creates +a+). May later be explicitly declared.
+  # - +:explicit+ -- declared with a [table] header.
+  # - +:dotted+ -- created and defined by a dotted key (a.b = 1 defines +a+).
+  #   Cannot be redeclared with a header, but new sub-tables may be
+  #   declared underneath it.
+  # - +:array+ -- an array of tables established by [[table]] headers.
+  # - +:element+ -- one element of an array of tables; each element opens a
+  #   fresh scope so sibling elements never conflict with each other.
+  # - +:value+ -- a plain key/value pair leaf (not a table).
+  class TableDeclaration
+    KIND_DESCRIPTIONS = {
+      implicit: 'implicit parent table',
+      explicit: 'explicit table',
+      dotted: 'dotted-key table',
+      array: 'array of tables',
+      element: 'array-of-tables element',
+      value: 'value'
+    }.freeze
+
+    attr_reader :key, :kind, :line, :defined_line, :parent, :children, :elements
+
+    def initialize(key, kind, line, parent = nil)
+      @key = key
+      @kind = kind
+      @line = line
+      @defined_line = kind == :implicit ? nil : line
+      @parent = parent
+      @children = {}
+      @elements = []
+    end
+
+    def describe
+      KIND_DESCRIPTIONS.fetch(kind)
+    end
+
+    # Line at which the current semantic identity was established.
+    def formation_line
+      defined_line || line
+    end
+
+    def path
+      keys = []
+      node = self
+      while node&.key
+        keys.unshift(node.key) unless node.kind == :element
+        node = node.parent
+      end
+      keys
+    end
+
+    # A [table] header arriving after the table was implicitly created as a
+    # parent is legal: the implicit declaration is upgraded in place.
+    def mark_explicit(line)
+      @kind = :explicit
+      @defined_line = line
+    end
+
+    # A dotted key traversing an implicit parent defines it (a.b.c = 1 under
+    # an implicit +a.b+ defines +a.b+), so a later [a.b] header conflicts.
+    def mark_dotted(line)
+      @kind = :dotted
+      @defined_line = line
+    end
+
+    def add_element(line)
+      element = self.class.new(key, :element, line, self)
+      elements << element
+      element
+    end
+
+    # Scope into which nested declarations of the current document position
+    # are recorded: the latest element for arrays, the table itself otherwise.
+    def current_scope
+      kind == :array ? elements.last : self
+    end
+  end
+
+  # Declaration audit shared by Tomlrb.parse and Tomlrb.audit.
+  #
+  # Tracks how every table in the document was formed and diagnoses duplicate
+  # definitions, pointing at both the declaration that first established the
+  # semantic identity and the conflicting declaration.
   class Keys
+    TABLE_KINDS = %i[implicit explicit dotted array element].freeze
+
+    REPORT_KINDS = {
+      implicit: :implicit,
+      explicit: :explicit,
+      dotted: :dotted,
+      array: :array_of_tables,
+      element: :array_element
+    }.freeze
+
     def initialize
-      @keys = {}
+      @root = TableDeclaration.new(nil, :explicit, nil)
+      @declarations = []
     end
 
-    def add_table_key(keys, is_array_of_tables = false)
-      self << [keys, [], is_array_of_tables]
+    def add_table_key(keys, is_array_of_tables = false, line: nil)
+      scope = @root
+      keys.each_with_index do |key, index|
+        last = index == keys.length - 1
+        declaration = scope.children[key]
+        if last
+          scope = declare_table_leaf(scope, declaration, key, is_array_of_tables, line)
+        else
+          declaration ||= record(scope, key, :implicit, line)
+          unless %i[implicit explicit dotted array].include?(declaration.kind)
+            raise_conflict(declaration, :explicit, line)
+          end
+          scope = declaration.current_scope
+        end
+      end
     end
 
-    def add_pair_key(keys, context)
-      self << [context, keys, false]
+    def add_pair_key(keys, context, line: nil)
+      scope = @root
+      context.each do |key|
+        scope = scope.children[key].current_scope
+      end
+      keys.each_with_index do |key, index|
+        last = index == keys.length - 1
+        declaration = scope.children[key]
+        if last
+          raise_conflict(declaration, :value, line) if declaration
+          scope.children[key] = TableDeclaration.new(key, :value, line, scope)
+        else
+          case declaration&.kind
+          when nil
+            declaration = record(scope, key, :dotted, line)
+          when :dotted
+            # already defined by an earlier dotted key; nothing to do
+          when :implicit
+            declaration.mark_dotted(line)
+          else
+            raise_conflict(declaration, :dotted, line)
+          end
+          scope = declaration.current_scope
+        end
+      end
     end
 
-    def <<(keys)
-      table_keys, pair_keys, is_array_of_tables = keys
-      current = @keys
-      current = append_table_keys(current, table_keys, pair_keys.empty?, is_array_of_tables)
-      append_pair_keys(current, pair_keys, table_keys.empty?, is_array_of_tables)
+    # Audit report explaining how each table in the document was formed.
+    def report
+      entries = @declarations.map do |declaration|
+        AuditReport::TableEntry.new(declaration.path, REPORT_KINDS.fetch(declaration.kind), declaration.formation_line)
+      end
+      AuditReport.new(entries)
     end
 
     private
 
-    def append_table_keys(current, table_keys, pair_keys_empty, is_array_of_tables)
-      table_keys.each_with_index do |key, index|
-        declared = (index == table_keys.length - 1) && pair_keys_empty
-        if index.zero?
-          current = find_or_create_first_table_key(current, key, declared, is_array_of_tables)
-        else
-          current <<= [key, :table, declared, is_array_of_tables]
+    def declare_table_leaf(scope, declaration, key, is_array_of_tables, line)
+      if is_array_of_tables
+        if declaration.nil?
+          declaration = record(scope, key, :array, line)
+        elsif declaration.kind != :array
+          raise_conflict(declaration, :array, line)
         end
-      end
-
-      current.clear_children if is_array_of_tables
-      current
-    end
-
-    def find_or_create_first_table_key(current, key, declared, is_array_of_tables)
-      existed = current[key]
-      if existed && existed.type == :pair
-        raise Key::KeyConflict, "Key #{key} is already used as #{existed.type} key"
-      end
-      if existed && existed.declared? && declared && ! is_array_of_tables
-        raise Key::KeyConflict, "Key #{key} is already used"
-      end
-      k = existed || Key.new(key, :table, declared)
-      k.declared = k.declared? || declared
-      current[key] = k
-      k
-    end
-
-    def append_pair_keys(current, pair_keys, table_keys_empty, is_array_of_tables)
-      pair_keys.each_with_index do |key, index|
-        declared = index == pair_keys.length - 1
-        if index.zero? && table_keys_empty
-          current = find_or_create_first_pair_key(current, key, declared, table_keys_empty)
+        record_declaration(declaration.add_element(line))
+        declaration
+      else
+        case declaration&.kind
+        when nil
+          record(scope, key, :explicit, line)
+        when :implicit
+          declaration.mark_explicit(line)
+          declaration
         else
-          key = current << [key, :pair, declared, is_array_of_tables]
-          current = key
+          raise_conflict(declaration, :explicit, line)
         end
       end
     end
 
-    def find_or_create_first_pair_key(current, key, declared, table_keys_empty)
-      existed = current[key]
-      if existed && (existed.type == :pair) && declared && table_keys_empty
-        raise Key::KeyConflict, "Key #{key} is already used"
-      end
-      k = Key.new(key, :pair, declared)
-      current[key] = k
-      k
+    def record(scope, key, kind, line)
+      record_declaration(scope.children[key] = TableDeclaration.new(key, kind, line, scope))
+    end
+
+    def record_declaration(declaration)
+      @declarations << declaration if TABLE_KINDS.include?(declaration.kind)
+      declaration
+    end
+
+    def raise_conflict(declaration, new_kind, line)
+      raise Key::KeyConflict.new(
+        path: declaration.path,
+        existing_kind: declaration.kind,
+        existing_line: declaration.formation_line,
+        new_kind: new_kind,
+        new_line: line
+      )
+    end
+  end
+
+  # Audit report returned by Tomlrb.audit, explaining how each table in the
+  # document was formed.
+  class AuditReport
+    TableEntry = Struct.new(:path, :kind, :line)
+
+    include Enumerable
+
+    attr_reader :tables
+
+    def initialize(tables)
+      @tables = tables
+    end
+
+    def each(&block)
+      @tables.each(&block)
+    end
+
+    def find(path)
+      path = path.split('.') if path.is_a?(String)
+      @tables.find { |entry| entry.path == path }
     end
   end
 
   class Key
-    class KeyConflict < ParseError; end
+    # Raised when a declaration conflicts with the semantic identity a
+    # previous declaration already established. Carries both locations.
+    class KeyConflict < ParseError
+      attr_reader :path, :existing_kind, :existing_line, :new_kind, :new_line
 
-    attr_reader :key, :type
-    attr_writer :declared
-
-    def initialize(key, type, declared = false)
-      @key = key
-      @type = type
-      @declared = declared
-      @children = {}
-    end
-
-    def declared?
-      @declared
-    end
-
-    def <<(key_type_declared)
-      key, type, declared, is_array_of_tables = key_type_declared
-      existed = @children[key]
-      validate_already_declared_as_different_key(type, declared, existed)
-      validate_already_declared_as_non_array_table(type, is_array_of_tables, declared, existed)
-      validate_path_already_created_as_different_type(type, declared, existed)
-      validate_path_already_declared_as_different_type(type, declared, existed)
-      validate_already_declared_as_same_key(declared, existed)
-      @children[key] = existed || self.class.new(key, type, declared)
-    end
-
-    def clear_children
-      @children.clear
-    end
-
-    private
-
-    def validate_already_declared_as_different_key(type, _declared, existed)
-      if existed && existed.declared? && existed.type != type
-        raise KeyConflict, "Key #{existed.key} is already used as #{existed.type} key"
+      def initialize(path:, existing_kind:, existing_line:, new_kind:, new_line:)
+        @path = path
+        @existing_kind = existing_kind
+        @existing_line = existing_line
+        @new_kind = new_kind
+        @new_line = new_line
+        super(build_message)
       end
-    end
 
-    def validate_already_declared_as_non_array_table(type, is_array_of_tables, declared, existed)
-      if declared && type == :table && existed && existed.declared? && !is_array_of_tables
-        raise KeyConflict, "Key #{existed.key} is already used"
-      end
-    end
+      private
 
-    def validate_path_already_created_as_different_type(type, declared, existed)
-      if declared && (type == :table) && existed && (existed.type == :pair) && !existed.declared?
-        raise KeyConflict, "Key #{existed.key} is already used as #{existed.type} key"
-      end
-    end
-
-    def validate_path_already_declared_as_different_type(type, declared, existed)
-      if !declared && (type == :pair) && existed && (existed.type == :pair) && existed.declared?
-        raise KeyConflict, "Key #{key} is already used as #{type} key"
-      end
-    end
-
-    def validate_already_declared_as_same_key(declared, existed)
-      if existed && !existed.declared? && declared
-        raise KeyConflict, "Key #{existed.key} is already used as #{existed.type} key"
+      def build_message
+        message = "Duplicate declaration of '#{path.join('.')}': "
+        message << "first defined as #{TableDeclaration::KIND_DESCRIPTIONS.fetch(existing_kind)}"
+        message << " at line #{existing_line}" if existing_line
+        message << ", cannot be redefined as #{TableDeclaration::KIND_DESCRIPTIONS.fetch(new_kind)}"
+        message << " at line #{new_line}" if new_line
+        message
       end
     end
   end

@@ -18,8 +18,8 @@ rule
     | table_start table_end EOS
     ;
   table_start
-    : '[' '[' { @handler.start_(:array_of_tables) }
-    | '[' { @handler.start_(:table) }
+    : '[' '[' { @handler.start_(:array_of_tables, line: @tokenizer.token_line) }
+    | '[' { @handler.start_(:table, line: @tokenizer.token_line) }
     ;
     ;
   table_end
@@ -109,10 +109,10 @@ rule
     | assignment_key '.' FLOAT { val[2].split('.').each { |k| @handler.push(k) } }
     | FLOAT {
       keys = val[0].split('.')
-      @handler.start_(:keys)
+      @handler.start_(:keys, line: @tokenizer.token_line)
       keys.each { |key| @handler.push(key) }
     }
-    | assignment_key_component { @handler.start_(:keys); @handler.push(val[0]) }
+    | assignment_key_component { @handler.start_(:keys, line: @tokenizer.token_line); @handler.push(val[0]) }
     ;
   assignment_key_component
     : IDENTIFIER
