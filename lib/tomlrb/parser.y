@@ -1,5 +1,5 @@
 class Tomlrb::GeneratedParser
-token IDENTIFIER STRING_MULTI STRING_BASIC STRING_LITERAL_MULTI STRING_LITERAL DATETIME LOCAL_TIME INTEGER NON_DEC_INTEGER FLOAT FLOAT_KEYWORD BOOLEAN NEWLINE EOS
+token IDENTIFIER STRING_MULTI STRING_BASIC STRING_LITERAL_MULTI STRING_LITERAL DATETIME LOCAL_TIME INTEGER NON_DEC_INTEGER FLOAT FLOAT_KEYWORD BOOLEAN NEWLINE INLINE_COMMA INLINE_TRAILING_COMMA EOS
 rule
   expressions
     | expressions expression
@@ -38,7 +38,7 @@ rule
     ;
   table_identifier_component
     : IDENTIFIER
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL
     | INTEGER
     | NON_DEC_INTEGER
@@ -49,7 +49,13 @@ rule
     ;
   inline_table
     : inline_table_start inline_table_end
-    | inline_table_start inline_continued inline_table_end
+    | inline_table_start inline_newlines inline_table_end
+    | inline_table_start inline_continued inline_tail inline_table_end
+    | inline_table_start inline_newlines inline_continued inline_tail inline_table_end
+    ;
+  inline_newlines
+    : NEWLINE
+    | inline_newlines NEWLINE
     ;
   inline_table_start
     : '{' { @handler.start_(:inline) }
@@ -62,10 +68,13 @@ rule
     ;
   inline_continued
     : inline_assignment
-    | inline_assignment inline_next
+    | inline_assignment INLINE_COMMA inline_continued
+    | inline_assignment INLINE_COMMA inline_newlines inline_continued
+    | inline_assignment INLINE_TRAILING_COMMA { reject_1_1_feature('Trailing commas in inline tables') }
     ;
-  inline_next
-    : ',' inline_continued
+  inline_tail
+    :
+    | NEWLINE
     ;
   inline_assignment
     : inline_assignment_key '=' value {
@@ -116,7 +125,7 @@ rule
     ;
   assignment_key_component
     : IDENTIFIER
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL
     | INTEGER
     | NON_DEC_INTEGER
@@ -206,15 +215,17 @@ rule
                  if hour.nil?
                    LocalDate.new(year, month, day)
                  else
-                   LocalDateTime.new(year, month, day, hour, min || 0, sec.to_f)
+                  LocalDateTime.new(year, month, day, hour, min || 0, parse_seconds(sec), sec)
                  end
                else
                  # Patch for 24:00:00 which Ruby parses
-                 if hour.to_i == 24 && min.to_i == 0 && sec.to_i == 0
-                   hour = (hour.to_i + 1).to_s
-                 end
+                if hour.to_i == 24 && min.to_i == 0 && sec.to_f.to_i == 0
+                  hour = (hour.to_i + 1).to_s
+                end
 
-                 time = Time.new(year, month, day, hour || 0, min || 0, sec.to_f, offset)
+                seconds = parse_seconds(sec)
+                time = Time.new(year, month, day, hour || 0, min || 0, seconds, offset)
+                time = time.utc if offset == '+00:00'
                  # Should be out of parser.y?
                  raise ArgumentError, "Invalid Offset Date-Time: #{year}-#{month}-#{day}T#{hour}:#{min}:#{sec}#{offset}" unless min.to_i == time.min && hour.to_i == time.hour && day.to_i == time.day && month.to_i == time.month && year.to_i == time.year
                  time
@@ -223,8 +234,8 @@ rule
     | LOCAL_TIME { result = LocalTime.new(*val[0][1..-1]) }
     ;
   string
-    : STRING_MULTI { result = StringUtils.replace_escaped_chars(StringUtils.multiline_replacements(val[0])) }
-    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0]) }
+    : STRING_MULTI { result = StringUtils.replace_escaped_chars(StringUtils.multiline_replacements(val[0]), version: @version) }
+    | STRING_BASIC { result = StringUtils.replace_escaped_chars(val[0], version: @version) }
     | STRING_LITERAL_MULTI { result = StringUtils.strip_spaces(val[0]) }
     | STRING_LITERAL { result = val[0] }
     ;

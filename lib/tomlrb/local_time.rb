@@ -8,10 +8,11 @@ module Tomlrb
 
     def_delegators :@time, :hour, :min, :sec, :usec, :nsec
 
-    def initialize(hour, min, sec)
+    def initialize(hour, min, sec, sec_text = nil)
       @time = Time.utc(0, 1, 1, hour, min, sec)
       raise ArgumentError, "Invalid Local Time: #{hour}-#{min}-#{sec}" unless min.to_i == @time.min && hour.to_i == @time.hour
-      @sec = sec
+      @sec = decimal_to_seconds(sec)
+      @sec_text = sec_text || sec.to_s
     end
 
     # @param year [Integer]
@@ -24,18 +25,29 @@ module Tomlrb
     end
 
     def to_s
-      frac = (@sec - sec)
-      frac_str = frac.zero? ? '' : frac.to_s[1..-1]
+      frac_str = @sec_text.include?('.') ? ".#{@sec_text.split('.', 2).last}" : ''
       @time.strftime('%T') << frac_str
     end
 
     def ==(other)
       other.is_a?(self.class) &&
-        @time == other.to_time(0, 1, 1)
+        @time == other.to_time(0, 1, 1) &&
+        @sec == other.instance_variable_get(:@sec)
     end
 
     def inspect
       "#<#{self.class}: #{self}>"
+    end
+
+    private
+
+    def decimal_to_seconds(value)
+      return value if value.is_a?(Numeric)
+
+      whole, fraction = value.to_s.split('.', 2)
+      result = whole.to_r
+      result += Rational(fraction, 10 ** fraction.length) if fraction
+      result
     end
   end
 end

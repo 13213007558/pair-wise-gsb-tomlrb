@@ -4,7 +4,7 @@
 [![Gem Version](https://badge.fury.io/rb/tomlrb.svg)](http://badge.fury.io/rb/tomlrb)
 [![Build status](https://github.com/fbernier/tomlrb/workflows/ci/badge.svg)](https://github.com/fbernier/tomlrb/actions)
 
-A Racc based [TOML](https://github.com/toml-lang/toml) Ruby parser supporting the 1.0.0 version of the spec.
+A Racc based [TOML](https://github.com/toml-lang/toml) Ruby parser supporting TOML 1.0 and 1.1.
 
 ## TODO
 
@@ -30,6 +30,8 @@ Or install it yourself as:
 
 ```ruby
 Tomlrb.parse("[toml]\na = [\"array\", 123]")
+
+Tomlrb.parse("a = { b = 1, }", version: "1.1")
 ```
 
 or
@@ -37,6 +39,16 @@ or
 ```ruby
 Tomlrb.load_file('my_file', symbolize_keys: true)
 ```
+
+## Version targeting and downgrading
+
+Parsing defaults to TOML 1.0. Pass `version: "1.1"` to accept the new TOML
+1.1 escapes, dates and times without seconds, and multiline inline tables.
+
+`Tomlrb.downgrade` parses TOML 1.1 and structurally generates TOML 1.0 text.
+It keeps dates, local times, offset date-times, floats, infinity, and NaN as
+native TOML values. On failure, `result.errors` contains path-scoped reasons;
+`Tomlrb.downgrade!` raises `Tomlrb::DowngradeError` instead.
 
 ## Benchmark
 
